@@ -2,11 +2,9 @@ const http = require('http');
 const express = require('express');
 const socketIo = require('socket.io');
 const mongoose = require('mongoose');
-
 // Import the necessary models
-
-const Salesman=require('./src/model/salesman.model')
-
+const Salesman = require('./src/model/salesman.model');
+const User = require('./src/model/user.model');
 // Load environment variables from .env file
 require('dotenv').config();
 
@@ -17,14 +15,8 @@ const io = socketIo(server);
 // Middleware to parse JSON bodies
 app.use(express.json());
 
-
-// Function to find the nearest active driver
-
-
-
-
-// Connect to Monmongodb+srv://Rahul:myuser@rahul.fack9.mongodb.net/Databaserahul?authSource=admin&replicaSet=atlas-117kuv-shard-0&w=majority&readPreference=primary&retryWrites=true&ssl=truegoDB
-mongoose.connect("mongodb+srv://Rahul:myuser@rahul.fack9.mongodb.net/Databaserahul?authSource=admin&replicaSet=atlas-117kuv-shard-0&w=majority&readPreference=primary&retryWrites=true&ssl=true")
+// Connect to MongoDB
+mongoose.connect(process.env.MONGODB_URI)
   .then(() => {
     console.log('Connected to MongoDB');
   })
@@ -33,56 +25,72 @@ mongoose.connect("mongodb+srv://Rahul:myuser@rahul.fack9.mongodb.net/Databaserah
   });
 
 // Socket.io connection event handler
-
-
-
-
-
-let salesmanSockets=new Map();
+let salesmanSockets = new Map();
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
 
-  // Existing code...
+  let changeStream;
 
-  // Handle registering a salesman
-  socket.on('registerSalesman', (email) => {
-    console.log(email);
+  // Handle email event
+  socket.on('email', (email) => {
+    console.log('Received email:', email);
+
+    // Store the socket connection with email
     salesmanSockets.set(email, socket);
-    console.log('Salesman registered:', salesmanSockets);
-  });
 
-  // Handle location updates from salesmen
-  
+    // Close previous change stream if it exists
+    if (changeStream) {
+      changeStream.close();
+    }
+
+    // Set up a change stream to listen for changes in the User collection
+    changeStream = User.watch([
+      { $match: { $and: [{ 'fullDocument.email': email }] } }
+    ]);
+
+    changeStream.on('change', async (change) => {
+      console.log('Change occurred:', change);
+
+      // Extract the updated document from the change event
+      const updatedDocument = await User.findById(change.documentKey._id);
+      console.log('Updated Document:', updatedDocument);
+
+      // Emit the updated document to the specific client's socket
+      if (updatedDocument) {
+        // Emit updated location if the document is found
+        socket.emit('salesmanLocation', {
+          latitude: updatedDocument.location.lat,
+          longitude: updatedDocument.location.log
+        });
+      }
+    });
+
+    socket.on('disconnect', () => {
+      console.log('Client disconnected:', socket.id);
+      // Remove socket from salesmanSockets map when disconnected
+      salesmanSockets.forEach((value, key) => {
+        if (value === socket) {
+          salesmanSockets.delete(key);
+        }
+      });
+      // Close the change stream when the socket disconnects
+      if (changeStream) {
+        changeStream.close();
+      }
+    });
+  });
 
   // Handle salesman disconnection
   socket.on('disconnect', () => {
-    for (const [userId, salesmanSocket] of salesmanSockets.entries()) {
+    for (const [email, salesmanSocket] of salesmanSockets.entries()) {
       if (salesmanSocket.id === socket.id) {
-        salesmanSockets.delete(userId);
-        console.log('Salesman disconnected:', userId);
+        salesmanSockets.delete(email);
+        console.log('Salesman disconnected:', email);
         break;
       }
     }
-
-    // Clean up the driver and client maps
-    driverSockets.forEach((s, phoneNumber) => {
-      if (s.id === socket.id) {
-        driverSockets.delete(phoneNumber);
-      }
-    });
-
-    clientSockets.forEach((s, phoneNumber) => {
-      if (s.id === socket.id) {
-        clientSockets.delete(phoneNumber);
-      }
-    });
   });
-
-  // Additional existing code...
 });
-
-
-
 
 const port = process.env.PORT || 3001;
 server.listen(port, () => {
