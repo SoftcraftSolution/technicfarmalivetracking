@@ -16,7 +16,7 @@ const io = socketIo(server);
 app.use(express.json());
 
 // Connect to MongoDB
-mongoose.connect(process.env.MONGODB_URI)
+mongoose.connect('mongodb+srv://Rahul:myuser@rahul.fack9.mongodb.net/TechnicFarma?authSource=admin&replicaSet=atlas-117kuv-shard-0&w=majority&readPreference=primary&retryWrites=true&ssl=true')
   .then(() => {
     console.log('Connected to MongoDB');
   })
@@ -25,70 +25,40 @@ mongoose.connect(process.env.MONGODB_URI)
   });
 
 // Socket.io connection event handler
-let salesmanSockets = new Map();
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
 
-  let changeStream;
+  socket.on('watchDocument', async (email) => {
+    console.log('Watching document for email:', email);
 
-  // Handle email event
-  socket.on('email', (email) => {
-    console.log('Received email:', email);
-
-    // Store the socket connection with email
-    salesmanSockets.set(email, socket);
-
-    // Close previous change stream if it exists
-    if (changeStream) {
-      changeStream.close();
-    }
-
-    // Set up a change stream to listen for changes in the User collection
-    changeStream = User.watch([
-      { $match: { $and: [{ 'fullDocument.email': email }] } }
-    ]);
+    // Set up a change stream to watch changes in the User collection
+    const changeStream = User.watch();
 
     changeStream.on('change', async (change) => {
       console.log('Change occurred:', change);
 
-      // Extract the updated document from the change event
-      const updatedDocument = await User.findById(change.documentKey._id);
-      console.log('Updated Document:', updatedDocument);
+      if (change.operationType === 'update' || change.operationType === 'replace') {
+        // Fetch the updated document
+        const updatedDocument = await User.findById(change.documentKey._id);
 
-      // Emit the updated document to the specific client's socket
-      if (updatedDocument) {
-        // Emit updated location if the document is found
-        socket.emit('salesmanLocation', {
-          latitude: updatedDocument.location.lat,
-          longitude: updatedDocument.location.log
-        });
+        // Check if the email field in the updated document matches the provided email
+        if (updatedDocument && updatedDocument.email === email) {
+          console.log('Updated Document:', updatedDocument);
+
+          // Emit the updated document fields to the specific client's socket
+          socket.emit('documentUpdated', updatedDocument.location);
+        }
       }
     });
 
     socket.on('disconnect', () => {
       console.log('Client disconnected:', socket.id);
-      // Remove socket from salesmanSockets map when disconnected
-      salesmanSockets.forEach((value, key) => {
-        if (value === socket) {
-          salesmanSockets.delete(key);
-        }
-      });
-      // Close the change stream when the socket disconnects
-      if (changeStream) {
-        changeStream.close();
-      }
+      changeStream.close();
     });
   });
 
-  // Handle salesman disconnection
   socket.on('disconnect', () => {
-    for (const [email, salesmanSocket] of salesmanSockets.entries()) {
-      if (salesmanSocket.id === socket.id) {
-        salesmanSockets.delete(email);
-        console.log('Salesman disconnected:', email);
-        break;
-      }
-    }
+    console.log('Client disconnected:', socket.id);
   });
 });
 
