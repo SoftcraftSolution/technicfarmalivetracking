@@ -31,6 +31,18 @@ io.on('connection', (socket) => {
   socket.on('watchDocument', async (email) => {
     console.log('Watching document for email:', email);
 
+    // Fetch the initial user document with the provided email
+    const initialUser = await User.findOne({ email: email });
+
+    if (initialUser) {
+      // Emit the initial location data to the client
+      socket.emit('documentUpdated', initialUser.location);
+    } else {
+      console.log('User not found with email:', email);
+      socket.emit('error', 'User not found');
+      return;
+    }
+
     // Set up a change stream to watch changes in the User collection
     const changeStream = User.watch();
 
